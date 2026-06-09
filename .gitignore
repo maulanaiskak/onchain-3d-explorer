@@ -1,0 +1,32 @@
+# Java / Maven
+backend/target/
+*.class
+*.jar
+*.war
+
+# Spring
+backend/src/main/resources/application-local.yml
+
+# Node / Next.js
+web/node_modules/
+web/.next/
+web/.env.local
+web/.env*.local
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.key
+gcp-credentials*.json
+application-secrets.yml
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+*.DS_Store
+
+# Logs
+*.log
+logs/
