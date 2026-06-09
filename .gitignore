@@ -1,8 +1,10 @@
-# Java / Maven
-backend/target/
+# Java / Gradle
+backend/.gradle/
+backend/build/
 *.class
 *.jar
 *.war
+!backend/gradle/wrapper/gradle-wrapper.jar
 
 # Spring
 backend/src/main/resources/application-local.yml
