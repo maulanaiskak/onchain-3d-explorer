@@ -15,144 +15,167 @@ import reactor.util.retry.Retry;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * Solana chain connector.
+ * Solana chain connector using the free public Solana mainnet RPC.
  *
- * <p>When a Helius API key is configured, connects via websocket to
- * {@code wss://mainnet.helius-rpc.com/?api-key=KEY} and subscribes to
- * {@code logsSubscribe}. Falls back to polling the public Solana RPC when no
- * key is present.
+ * <p>Subscribes to {@code logsSubscribe} via WebSocket to receive confirmed
+ * transaction signatures in real time, then fetches each full transaction via
+ * {@code getTransaction} over HTTP to extract pre/post balances for normalisation.
+ *
+ * <p>An optional Helius API key is supported for higher rate limits but is
+ * not required — the public {@code api.mainnet-beta.solana.com} endpoint works
+ * without any credentials.
  */
 @Slf4j
 public class SolanaConnector implements ChainConnector {
 
-    private static final String PUBLIC_WS_URI    = "wss://api.mainnet-beta.solana.com";
-    private static final String HELIUS_WS_TMPL   = "wss://mainnet.helius-rpc.com/?api-key=%s";
-    private static final String PUBLIC_REST_URL   = "https://api.mainnet-beta.solana.com";
+    private static final String PUBLIC_WS_URL   = "wss://api.mainnet-beta.solana.com";
+    private static final String PUBLIC_REST_URL  = "https://api.mainnet-beta.solana.com";
+    private static final String HELIUS_WS_TMPL  = "wss://mainnet.helius-rpc.com/?api-key=%s";
+    private static final String HELIUS_REST_TMPL = "https://mainnet.helius-rpc.com/?api-key=%s";
 
-    private static final String SUBSCRIBE_MSG = """
-            {"jsonrpc":"2.0","id":1,"method":"logsSubscribe","params":["all",{"commitment":"confirmed"}]}
-            """;
+    private static final String LOGS_SUBSCRIBE = """
+            {"jsonrpc":"2.0","id":1,"method":"logsSubscribe",\
+            "params":["all",{"commitment":"confirmed"}]}""";
 
     private final String heliusApiKey;
     private final WebSocketClient wsClient;
     private final WebClient webClient;
     private final ObjectMapper objectMapper;
 
-    public SolanaConnector(String heliusApiKey, WebClient.Builder webClientBuilder, ObjectMapper objectMapper) {
+    public SolanaConnector(String heliusApiKey, WebClient.Builder webClientBuilder,
+                           ObjectMapper objectMapper) {
         this.heliusApiKey = heliusApiKey == null ? "" : heliusApiKey.strip();
         this.wsClient     = new ReactorNettyWebSocketClient();
-        this.webClient    = webClientBuilder.baseUrl(PUBLIC_REST_URL).build();
+        String restUrl    = this.heliusApiKey.isBlank()
+                ? PUBLIC_REST_URL
+                : HELIUS_REST_TMPL.formatted(this.heliusApiKey);
+        this.webClient    = webClientBuilder.baseUrl(restUrl).build();
         this.objectMapper = objectMapper;
     }
 
     @Override
-    public String chain() {
-        return "solana";
-    }
+    public String chain() { return "solana"; }
 
     @Override
     public Flux<RawTxEvent> connect() {
-        if (heliusApiKey.isBlank()) {
-            log.info("SolanaConnector: no Helius key — using polling fallback");
-            return pollFallback();
-        }
-        log.info("SolanaConnector: connecting via Helius websocket");
-        return connectWebSocket()
-                .retryWhen(Retry.backoff(Long.MAX_VALUE, Duration.ofSeconds(2))
+        String wsUrl = heliusApiKey.isBlank()
+                ? PUBLIC_WS_URL
+                : HELIUS_WS_TMPL.formatted(heliusApiKey);
+
+        log.info("SolanaConnector: connecting to {}", wsUrl);
+
+        return openWebSocket(wsUrl)
+                // Fetch full transaction details for each signature
+                .flatMap(sig -> fetchTransaction(sig), 8)
+                .filter(e -> e != null)
+                .retryWhen(Retry.backoff(Long.MAX_VALUE, Duration.ofSeconds(3))
                         .maxBackoff(Duration.ofSeconds(30))
-                        .doBeforeRetry(rs -> log.warn("SolanaConnector: retrying (attempt {})", rs.totalRetries() + 1)));
+                        .doBeforeRetry(rs -> log.warn(
+                                "SolanaConnector: WS error — retry #{}", rs.totalRetries() + 1)));
     }
 
     // -------------------------------------------------------------------------
-    // WebSocket path
+    // WebSocket — emit signatures
     // -------------------------------------------------------------------------
 
-    private Flux<RawTxEvent> connectWebSocket() {
-        URI uri = URI.create(heliusApiKey.isBlank() ? PUBLIC_WS_URI
-                : HELIUS_WS_TMPL.formatted(heliusApiKey));
+    private Flux<String> openWebSocket(String wsUrl) {
+        Sinks.Many<String> sink = Sinks.many().unicast().onBackpressureBuffer();
 
-        Sinks.Many<RawTxEvent> sink = Sinks.many().unicast().onBackpressureBuffer();
-
-        Mono<Void> session = wsClient.execute(uri, ws -> {
-            Flux<WebSocketMessage> send = Flux.just(ws.textMessage(SUBSCRIBE_MSG));
+        Mono<Void> session = wsClient.execute(URI.create(wsUrl), ws -> {
+            Flux<WebSocketMessage> send = Flux.just(ws.textMessage(LOGS_SUBSCRIBE));
             Flux<Void> receive = ws.receive()
                     .map(WebSocketMessage::getPayloadAsText)
-                    .flatMap(payload -> Flux.fromIterable(parseWsMessage(payload)))
-                    .doOnNext(event -> sink.tryEmitNext(event))
-                    .then()
-                    .flux();
+                    .flatMap(msg -> Flux.fromIterable(extractSignature(msg)))
+                    .doOnNext(sink::tryEmitNext)
+                    .then().flux();
             return ws.send(send).thenMany(receive).then();
         });
 
-        return sink.asFlux().mergeWith(session.cast(RawTxEvent.class));
+        return sink.asFlux().mergeWith(session.cast(String.class));
     }
 
-    private Iterable<RawTxEvent> parseWsMessage(String payload) {
+    private List<String> extractSignature(String payload) {
         try {
             JsonNode root = objectMapper.readTree(payload);
-            // logsSubscribe notifications have "method":"logsNotification"
-            JsonNode method = root.path("method");
-            if (!"logsNotification".equals(method.asText())) {
-                return java.util.List.of();
-            }
-            JsonNode value  = root.path("params").path("result").path("value");
-            String txHash   = value.path("signature").asText(null);
-            if (txHash == null || txHash.isBlank()) return java.util.List.of();
-
-            Map<String, Object> raw = new HashMap<>();
-            raw.put("logs", objectMapper.convertValue(value.path("logs"), java.util.List.class));
-            raw.put("err",  value.path("err").isNull() ? null : value.path("err").asText());
-            return java.util.List.of(new RawTxEvent(txHash, "solana", Instant.now(), raw));
+            if (!"logsNotification".equals(root.path("method").asText())) return List.of();
+            String sig = root.path("params").path("result").path("value")
+                    .path("signature").asText(null);
+            if (sig == null || sig.isBlank()) return List.of();
+            return List.of(sig);
         } catch (Exception e) {
-            log.debug("SolanaConnector: failed to parse ws message: {}", e.getMessage());
-            return java.util.List.of();
+            log.debug("SolanaConnector: extractSignature error — {}", e.getMessage());
+            return List.of();
         }
     }
 
     // -------------------------------------------------------------------------
-    // Polling fallback
+    // HTTP — fetch full transaction
     // -------------------------------------------------------------------------
 
-    private Flux<RawTxEvent> pollFallback() {
-        return Flux.interval(Duration.ofSeconds(3))
-                .flatMap(tick -> fetchRecentSignatures())
-                .retryWhen(Retry.backoff(Long.MAX_VALUE, Duration.ofSeconds(2))
-                        .maxBackoff(Duration.ofSeconds(30))
-                        .doBeforeRetry(rs -> log.warn("SolanaConnector poll: retrying (attempt {})", rs.totalRetries() + 1)));
-    }
-
-    private Flux<RawTxEvent> fetchRecentSignatures() {
+    private Mono<RawTxEvent> fetchTransaction(String signature) {
         String body = """
-                {"jsonrpc":"2.0","id":1,"method":"getRecentPerformanceSamples","params":[5]}
-                """;
+                {"jsonrpc":"2.0","id":1,"method":"getTransaction",\
+                "params":["%s",{"encoding":"jsonParsed","maxSupportedTransactionVersion":0}]}
+                """.formatted(signature);
+
         return webClient.post()
                 .uri("")
                 .header("Content-Type", "application/json")
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .flatMapMany(root -> {
-                    JsonNode samples = root.path("result");
-                    if (!samples.isArray()) return Flux.empty();
-                    Flux<RawTxEvent> events = Flux.empty();
-                    for (JsonNode sample : samples) {
-                        String slot = sample.path("slot").asText("0");
-                        Map<String, Object> raw = new HashMap<>();
-                        raw.put("slot",         slot);
-                        raw.put("numTransactions", sample.path("numTransactions").asInt(0));
-                        String syntheticHash = "slot-" + slot + "-" + Instant.now().toEpochMilli();
-                        events = events.concatWith(Flux.just(
-                                new RawTxEvent(syntheticHash, "solana", Instant.now(), raw)));
-                    }
-                    return events;
+                .flatMap(root -> {
+                    JsonNode result = root.path("result");
+                    if (result.isNull() || result.isMissingNode()) return Mono.empty();
+
+                    JsonNode meta = result.path("meta");
+                    JsonNode tx   = result.path("transaction");
+
+                    List<Number> pre  = jsonArrayToNumbers(meta.path("preBalances"));
+                    List<Number> post = jsonArrayToNumbers(meta.path("postBalances"));
+                    List<String> keys = jsonArrayToStrings(
+                            tx.path("message").path("accountKeys"));
+
+                    if (pre.isEmpty() || post.isEmpty() || keys.isEmpty()) return Mono.empty();
+
+                    Map<String, Object> raw = new HashMap<>();
+                    raw.put("preBalances",  pre);
+                    raw.put("postBalances", post);
+                    raw.put("accountKeys",  keys);
+
+                    return Mono.just(new RawTxEvent(signature, "solana", Instant.now(), raw));
                 })
                 .onErrorResume(e -> {
-                    log.debug("SolanaConnector poll error: {}", e.getMessage());
-                    return Flux.empty();
+                    log.debug("SolanaConnector: fetchTransaction error sig={} — {}", signature, e.getMessage());
+                    return Mono.empty();
                 });
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    private static List<Number> jsonArrayToNumbers(JsonNode arr) {
+        List<Number> list = new ArrayList<>();
+        if (arr.isArray()) arr.forEach(n -> list.add(n.longValue()));
+        return list;
+    }
+
+    private static List<String> jsonArrayToStrings(JsonNode arr) {
+        List<String> list = new ArrayList<>();
+        if (arr.isArray()) {
+            arr.forEach(node -> {
+                // jsonParsed accountKeys are objects with a "pubkey" field
+                if (node.isObject()) list.add(node.path("pubkey").asText());
+                else list.add(node.asText());
+            });
+        }
+        return list;
     }
 }

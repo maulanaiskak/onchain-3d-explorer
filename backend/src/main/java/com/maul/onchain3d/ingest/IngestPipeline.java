@@ -49,10 +49,13 @@ public class IngestPipeline {
             }
             flux.flatMap(normalizer::normalize)
                     .flatMap(edge -> graphService.persistEdge(edge).thenReturn(edge))
-                    .doOnNext(edge -> emitDeltas(edge))
+                    .doOnNext(this::emitDeltas)
+                    .onErrorContinue((err, obj) ->
+                            log.warn("IngestPipeline: skipping item due to error chain={}: {}",
+                                    connector.chain(), err.getMessage()))
                     .subscribe(
                             edge -> log.trace("IngestPipeline: processed edge txHash={}", edge.txHash()),
-                            err  -> log.error("IngestPipeline: connector chain={} error — pipeline may have stopped",
+                            err  -> log.error("IngestPipeline: connector chain={} pipeline terminated",
                                     connector.chain(), err));
         });
     }
