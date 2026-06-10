@@ -11,18 +11,18 @@ interface Props {
   onSelect: (id: string) => void;
 }
 
-function riskColor(risk: number, flagged: boolean): string {
-  if (flagged) return "#ef4444";
-  if (risk > 0.6) return "#f97316";
-  if (risk > 0.3) return "#eab308";
-  return "#22d3ee";
+function nodeColor(recency: number, isWhale: boolean): string {
+  if (isWhale) return "#a855f7";
+  if (recency > 0.7) return "#22d3ee";
+  if (recency > 0.4) return "#6366f1";
+  return "#374151";
 }
 
 export default function GraphNode({ node, isSelected, onSelect }: Props) {
   const meshRef = useRef<Mesh>(null);
   const [hovered, setHovered] = useState(false);
-  const radius = 0.15 + node.volume * 0.25;
-  const color = riskColor(node.risk, node.flagged);
+  const radius = 0.12 + node.weight * 0.28;
+  const color = nodeColor(node.recency, node.isWhale);
 
   return (
     <group position={node.position}>
@@ -37,13 +37,14 @@ export default function GraphNode({ node, isSelected, onSelect }: Props) {
         <meshStandardMaterial
           color={color}
           emissive={color}
-          emissiveIntensity={isSelected ? 0.8 : hovered ? 0.5 : 0.2}
+          emissiveIntensity={isSelected ? 0.9 : hovered ? 0.5 : 0.2}
           roughness={0.3}
           metalness={0.6}
+          transparent
+          opacity={0.4 + node.recency * 0.6}
         />
       </mesh>
 
-      {/* Glow ring when selected */}
       {isSelected && (
         <mesh>
           <ringGeometry args={[radius * 1.4, radius * 1.7, 32]} />
@@ -51,11 +52,11 @@ export default function GraphNode({ node, isSelected, onSelect }: Props) {
         </mesh>
       )}
 
-      {/* Label on hover */}
       {(hovered || isSelected) && (
         <Html distanceFactor={10} center>
           <div className="px-2 py-1 bg-black/80 text-cyan-300 text-xs rounded whitespace-nowrap pointer-events-none font-mono border border-cyan-500/40">
             {node.label ?? node.id.slice(0, 10) + "…"}
+            {node.isWhale && " 🐋"}
           </div>
         </Html>
       )}

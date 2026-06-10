@@ -2,9 +2,9 @@ export interface NodeDTO {
   id: string;
   chain: string;
   label: string | null;
-  volume: number;
-  risk: number;
-  flagged: boolean;
+  weight: number;   // aggregated transfer value weight
+  recency: number;  // 0-1, 1 = just seen
+  isWhale: boolean;
 }
 
 export interface EdgeDTO {
@@ -17,14 +17,14 @@ export interface EdgeDTO {
 }
 
 export const MOCK_NODES: NodeDTO[] = [
-  { id: "0xAAABBB", chain: "solana", label: "Whale A",   volume: 0.9, risk: 0.1, flagged: false },
-  { id: "0xCCCDDD", chain: "solana", label: null,        volume: 0.4, risk: 0.3, flagged: false },
-  { id: "0xEEEFFF", chain: "solana", label: "Exchange",  volume: 0.8, risk: 0.0, flagged: false },
-  { id: "0x111222", chain: "solana", label: null,        volume: 0.2, risk: 0.7, flagged: true  },
-  { id: "0x333444", chain: "solana", label: "Whale B",   volume: 0.6, risk: 0.2, flagged: false },
-  { id: "0x555666", chain: "solana", label: null,        volume: 0.1, risk: 0.9, flagged: true  },
-  { id: "0x777888", chain: "solana", label: "Bridge",    volume: 0.5, risk: 0.1, flagged: false },
-  { id: "0x999AAA", chain: "solana", label: null,        volume: 0.3, risk: 0.4, flagged: false },
+  { id: "0xAAABBB", chain: "solana", label: "Whale A",   weight: 0.9, recency: 1.0, isWhale: true  },
+  { id: "0xCCCDDD", chain: "solana", label: null,        weight: 0.4, recency: 0.8, isWhale: false },
+  { id: "0xEEEFFF", chain: "solana", label: "Exchange",  weight: 0.8, recency: 0.9, isWhale: false },
+  { id: "0x111222", chain: "solana", label: null,        weight: 0.2, recency: 0.5, isWhale: false },
+  { id: "0x333444", chain: "solana", label: "Whale B",   weight: 0.6, recency: 0.7, isWhale: true  },
+  { id: "0x555666", chain: "solana", label: null,        weight: 0.1, recency: 0.3, isWhale: false },
+  { id: "0x777888", chain: "solana", label: "Bridge",    weight: 0.5, recency: 0.6, isWhale: false },
+  { id: "0x999AAA", chain: "solana", label: null,        weight: 0.3, recency: 0.4, isWhale: false },
 ];
 
 export const MOCK_EDGES: EdgeDTO[] = [

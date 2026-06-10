@@ -1,13 +1,13 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useGraphStore } from "@/app/store/graph-store";
 import { MOCK_NODES, MOCK_EDGES } from "@/app/lib/mock-data";
+import { useSseStream, ConnectionStatus } from "@/app/lib/use-sse-stream";
 import NodePanel from "@/app/components/graph/NodePanel";
 import Hud from "@/app/components/graph/Hud";
 
-// R3F Canvas must be client-only (no SSR)
 const GraphCanvas = dynamic(() => import("@/app/components/graph/GraphCanvas"), {
   ssr: false,
   loading: () => (
@@ -17,18 +17,28 @@ const GraphCanvas = dynamic(() => import("@/app/components/graph/GraphCanvas"), 
   ),
 });
 
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8080";
+const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === "true";
+
 export default function Home() {
   const { upsertNodes, upsertEdges } = useGraphStore();
+  const [status, setStatus] = useState<ConnectionStatus>("connecting");
 
+  // Load mock data as initial seed when backend is unreachable
   useEffect(() => {
-    upsertNodes(MOCK_NODES);
-    upsertEdges(MOCK_EDGES);
-  }, [upsertNodes, upsertEdges]);
+    if (USE_MOCK) {
+      upsertNodes(MOCK_NODES);
+      upsertEdges(MOCK_EDGES);
+      setStatus("connected");
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useSseStream("solana", "1h", setStatus, USE_MOCK);
 
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-[#050914]">
       <GraphCanvas />
-      <Hud />
+      <Hud status={status} />
       <NodePanel />
     </main>
   );
