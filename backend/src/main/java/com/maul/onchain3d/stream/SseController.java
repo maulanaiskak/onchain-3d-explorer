@@ -45,7 +45,10 @@ public class SseController {
     @GetMapping(value = "/api/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<String>> stream(
             @RequestParam String chain,
-            @RequestParam(defaultValue = "1h") String window) {
+            @RequestParam(defaultValue = "1h") String window,
+            org.springframework.http.server.reactive.ServerHttpResponse response) {
+        response.getHeaders().set("X-Accel-Buffering", "no");
+        response.getHeaders().set("Cache-Control", "no-cache");
 
         log.info("SSE client connected chain={} window={}", chain, window);
 

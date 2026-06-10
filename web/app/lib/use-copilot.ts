@@ -14,7 +14,8 @@ export function useCopilot(chain: string, window: string) {
       setLoading(true);
 
       try {
-        const res = await fetch("/api/copilot", {
+        const base = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8080";
+        const res = await fetch(`${base}/api/copilot`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
           body: JSON.stringify({ intent, chain, window }),

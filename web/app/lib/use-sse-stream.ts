@@ -40,15 +40,14 @@ export function useSseStream(
       if (cancelled) return;
       onStatusChange("connecting");
 
-      const url = `/api/stream?chain=${encodeURIComponent(chain)}&window=${encodeURIComponent(window)}`;
+      const base = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8080";
+      const url = `${base}/api/stream?chain=${encodeURIComponent(chain)}&window=${encodeURIComponent(window)}`;
       const es = new EventSource(url);
       esRef.current = es;
 
       const handleEvent = (type: DeltaType) => (e: MessageEvent) => {
         try {
           const payload = JSON.parse(e.data) as Delta;
-          retryDelay.current = 1000; // reset backoff on successful message
-          onStatusChange("connected");
 
           switch (payload.type ?? type) {
             case "snapshot":
@@ -71,6 +70,14 @@ export function useSseStream(
         } catch {
           // malformed event — ignore
         }
+      };
+
+      // EventSource doesn't expose an onopen-equivalent for named events,
+      // so mark connected as soon as the first event of any type arrives.
+      // For named-event SSE, onopen fires when the HTTP connection is established.
+      es.onopen = () => {
+        retryDelay.current = 1000;
+        onStatusChange("connected");
       };
 
       es.addEventListener("snapshot",    handleEvent("snapshot"));
