@@ -39,3 +39,8 @@ app:
     value-floor-norm: ${VALUE_FLOOR_NORM:0.01}
   copilot:
     max-agent-steps: ${MAX_AGENT_STEPS:3}
+
+logging:
+  level:
+    com.maul.onchain3d: INFO
+    org.springframework.web: WARN
