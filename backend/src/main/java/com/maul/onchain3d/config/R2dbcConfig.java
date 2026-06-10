@@ -1,18 +1,32 @@
 package com.maul.onchain3d.config;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.JdbcTemplate;
 
-/**
- * R2DBC configuration for PostgreSQL.
- *
- * <p>The r2dbc-postgresql driver natively supports {@code float[]} column mapping used by
- * the {@code address_embedding.embedding} (vector) column. No custom codec registration
- * is required for basic array types. If a custom pgvector codec is needed in the future
- * (e.g., for typed {@code Vector} objects), register it here via
- * {@code PostgresqlConnectionConfiguration.Builder#codecRegistrar(CodecRegistrar)}.
- */
+import javax.sql.DataSource;
+
 @Configuration
 public class R2dbcConfig {
-    // pgvector float[] columns work natively with R2DBC PostgreSQL driver.
-    // Add custom CodecRegistrar beans here if vector type handling needs to be extended.
+
+    @Bean
+    public DataSource dataSource(
+            @Value("${spring.datasource.url}") String url,
+            @Value("${spring.datasource.username}") String username,
+            @Value("${spring.datasource.password}") String password) {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl(url);
+        config.setUsername(username);
+        config.setPassword(password);
+        config.setMaximumPoolSize(5);
+        return new HikariDataSource(config);
+    }
+
+    @Bean
+    public JdbcTemplate jdbcTemplate(DataSource dataSource) {
+        return new JdbcTemplate(dataSource);
+    }
 }
