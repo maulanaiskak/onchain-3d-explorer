@@ -4,7 +4,8 @@ backend/build/
 *.class
 *.jar
 *.war
-!backend/gradle/wrapper/gradle-wrapper.jar
+backend/gradle/wrapper/gradle-wrapper.jar
+backend/pom.xml
 
 # Spring
 backend/src/main/resources/application-local.yml
