@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     java
     id("org.springframework.boot") version "3.5.0"
@@ -55,8 +57,6 @@ dependencies {
     // Test
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("io.projectreactor:reactor-test")
-    testImplementation("org.testcontainers:junit-jupiter")
-    testImplementation("org.testcontainers:postgresql")
 }
 
 dependencyManagement {
@@ -67,4 +67,5 @@ dependencyManagement {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    timeout = Duration.ofMinutes(3)
 }

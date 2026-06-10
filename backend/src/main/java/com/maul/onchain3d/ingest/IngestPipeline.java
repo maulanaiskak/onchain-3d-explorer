@@ -42,8 +42,12 @@ public class IngestPipeline {
 
         connectors.forEach(connector -> {
             log.info("IngestPipeline: starting connector chain={}", connector.chain());
-            connector.connect()
-                    .flatMap(normalizer::normalize)
+            var flux = connector.connect();
+            if (flux == null) {
+                log.warn("IngestPipeline: connector chain={} returned null flux — skipping", connector.chain());
+                return;
+            }
+            flux.flatMap(normalizer::normalize)
                     .flatMap(edge -> graphService.persistEdge(edge).thenReturn(edge))
                     .doOnNext(edge -> emitDeltas(edge))
                     .subscribe(

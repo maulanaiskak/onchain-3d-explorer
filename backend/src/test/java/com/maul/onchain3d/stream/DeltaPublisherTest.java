@@ -7,9 +7,6 @@ import reactor.test.StepVerifier;
 
 import java.util.List;
 
-/**
- * Unit tests for {@link DeltaPublisher} hot multicast behaviour.
- */
 class DeltaPublisherTest {
 
     @Test
@@ -22,22 +19,26 @@ class DeltaPublisherTest {
         Delta delta2 = new Delta.UpsertNodes(List.of(node));
         Delta delta3 = new Delta.Heartbeat("2026-06-09T00:00:00Z");
 
-        // Subscribe before emitting
-        var sub1 = publisher.subscribe("solana");
-        var sub2 = publisher.subscribe("solana");
-
-        // Emit all three deltas
-        publisher.emit(delta1);
-        publisher.emit(delta2);
-        publisher.emit(delta3);
-
-        StepVerifier.create(sub1.take(3))
+        // sub1: emit inside .then() so StepVerifier is already subscribed before emit
+        StepVerifier.create(publisher.subscribe("solana").take(3))
+                .then(() -> {
+                    publisher.emit(delta1);
+                    publisher.emit(delta2);
+                    publisher.emit(delta3);
+                })
                 .expectNext(delta1)
                 .expectNext(delta2)
                 .expectNext(delta3)
                 .verifyComplete();
 
-        StepVerifier.create(sub2.take(3))
+        // sub2: separate subscription, new publisher instance so we get clean state
+        DeltaPublisher publisher2 = new DeltaPublisher();
+        StepVerifier.create(publisher2.subscribe("solana").take(3))
+                .then(() -> {
+                    publisher2.emit(delta1);
+                    publisher2.emit(delta2);
+                    publisher2.emit(delta3);
+                })
                 .expectNext(delta1)
                 .expectNext(delta2)
                 .expectNext(delta3)
@@ -55,14 +56,13 @@ class DeltaPublisherTest {
         Delta evmDelta    = new Delta.UpsertNodes(List.of(evmNode));
         Delta heartbeat   = new Delta.Heartbeat("2026-06-09T00:00:00Z");
 
-        var solanaSub = publisher.subscribe("solana");
-
-        publisher.emit(evmDelta);
-        publisher.emit(solanaDelta);
-        publisher.emit(heartbeat);
-
         // Only solana-chain delta and heartbeat pass the filter
-        StepVerifier.create(solanaSub.take(2))
+        StepVerifier.create(publisher.subscribe("solana").take(2))
+                .then(() -> {
+                    publisher.emit(evmDelta);
+                    publisher.emit(solanaDelta);
+                    publisher.emit(heartbeat);
+                })
                 .expectNext(solanaDelta)
                 .expectNext(heartbeat)
                 .verifyComplete();
