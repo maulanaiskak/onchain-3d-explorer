@@ -7,6 +7,7 @@ import { MOCK_NODES, MOCK_EDGES } from "@/app/lib/mock-data";
 import { useSseStream, ConnectionStatus } from "@/app/lib/use-sse-stream";
 import NodePanel from "@/app/components/graph/NodePanel";
 import Hud from "@/app/components/graph/Hud";
+import CopilotPanel from "@/app/components/copilot/CopilotPanel";
 
 const GraphCanvas = dynamic(() => import("@/app/components/graph/GraphCanvas"), {
   ssr: false,
@@ -17,14 +18,12 @@ const GraphCanvas = dynamic(() => import("@/app/components/graph/GraphCanvas"), 
   ),
 });
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8080";
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === "true";
 
 export default function Home() {
   const { upsertNodes, upsertEdges } = useGraphStore();
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
 
-  // Load mock data as initial seed when backend is unreachable
   useEffect(() => {
     if (USE_MOCK) {
       upsertNodes(MOCK_NODES);
@@ -40,6 +39,7 @@ export default function Home() {
       <GraphCanvas />
       <Hud status={status} />
       <NodePanel />
+      <CopilotPanel />
     </main>
   );
 }
