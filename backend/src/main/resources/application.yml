@@ -28,10 +28,11 @@ management:
 
 app:
   vertex:
-    project-id: ${VERTEX_PROJECT_ID:}
+    project-id: ${VERTEX_PROJECT_ID:trial-project-mawl}
     location: ${VERTEX_LOCATION:us-central1}
-    llm-model: ${VERTEX_MODEL:gemini-1.5-flash}
-    embed-model: ${VERTEX_EMBED_MODEL:text-embedding-004}
+    llm-model: ${VERTEX_MODEL:gemini-2.5-flash}
+    embed-model: ${VERTEX_EMBED_MODEL:gemini-embedding-001}
+    gemini-api-key: ${GEMINI_API_KEY:}
   ingest:
     helius-api-key: ${HELIUS_API_KEY:}
     alchemy-api-key: ${ALCHEMY_API_KEY:}

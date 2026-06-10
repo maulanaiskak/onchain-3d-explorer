@@ -9,7 +9,7 @@ import java.time.OffsetDateTime;
 /**
  * R2DBC entity mapping to the {@code address_embedding} table.
  *
- * <p>The {@code embedding} field is stored as a pgvector {@code vector(768)} column.
+ * <p>The {@code embedding} field is stored as a pgvector {@code vector(3072)} column.
  * It is mapped to {@code float[]} which is handled natively by the r2dbc-postgresql driver.
  */
 @Data

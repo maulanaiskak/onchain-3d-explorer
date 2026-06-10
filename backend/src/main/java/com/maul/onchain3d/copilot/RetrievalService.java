@@ -42,7 +42,7 @@ public class RetrievalService {
      *   <li>Hard-fact SQL query for top transfers by value from {@code GraphRepository}.</li>
      * </ol>
      *
-     * @param queryEmbedding 768-dimensional query vector
+     * @param queryEmbedding 3072-dimensional query vector
      * @param chain          chain identifier, e.g. {@code "solana"}
      * @param window         time window shorthand, e.g. {@code "1h"}
      * @return {@code Mono<RetrievalContext>} that never errors — returns an empty context on failure

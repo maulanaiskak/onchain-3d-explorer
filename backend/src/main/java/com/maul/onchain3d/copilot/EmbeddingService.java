@@ -20,58 +20,50 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Generates 768-dimensional text embeddings via Vertex AI {@code text-embedding-004}
- * and upserts them into the {@code address_embedding} table for RAG-based retrieval.
+ * Generates 3072-dimensional text embeddings via Google's gemini-embedding-001 model.
  *
- * <p>Authentication reuses the shared {@link GoogleCredentials} bean from {@code VertexConfig}.
+ * <p>Uses Google AI Studio (generativelanguage.googleapis.com) when a
+ * {@code GEMINI_API_KEY} is configured — no billing required.
+ * Falls back to Vertex AI (aiplatform.googleapis.com) with ADC otherwise.
  */
 @Slf4j
 @Service
 public class EmbeddingService {
 
-    private static final String ENDPOINT_TMPL =
+    // AI Studio endpoint (free, API-key auth)
+    private static final String AI_STUDIO_URL =
+            "https://generativelanguage.googleapis.com/v1beta/models/%s:embedContent?key=%s";
+
+    // Vertex AI endpoint (billing required, ADC auth)
+    private static final String VERTEX_URL =
             "https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:predict";
 
     private final WebClient webClient;
     private final GoogleCredentials credentials;
     private final JdbcTemplate jdbc;
     private final AppProperties props;
+    private final boolean useAiStudio;
 
     public EmbeddingService(@Qualifier("vertexWebClient") WebClient webClient,
                             GoogleCredentials credentials,
                             JdbcTemplate jdbc,
                             AppProperties props) {
-        this.webClient   = webClient;
-        this.credentials = credentials;
-        this.jdbc        = jdbc;
-        this.props       = props;
+        this.webClient    = webClient;
+        this.credentials  = credentials;
+        this.jdbc         = jdbc;
+        this.props        = props;
+        this.useAiStudio  = !props.vertex().geminiApiKey().isBlank();
+        log.info("EmbeddingService: using {} backend", useAiStudio ? "AI Studio (free)" : "Vertex AI");
     }
 
-    // -------------------------------------------------------------------------
-    // Public API
-    // -------------------------------------------------------------------------
-
-    /**
-     * Generates a 768-dimensional embedding for the given text.
-     *
-     * @param text the text to embed
-     * @return {@code Mono<float[]>} with 768 dimensions
-     */
     public Mono<float[]> embedText(String text) {
+        if (useAiStudio) return callAiStudio(text);
         return Mono.fromCallable(this::refreshedToken)
                 .subscribeOn(Schedulers.boundedElastic())
-                .flatMap(token -> callEmbedEndpoint(token, text))
+                .flatMap(token -> callVertex(token, text))
                 .doOnError(e -> log.error("EmbeddingService.embedText failed", e));
     }
 
-    /**
-     * Builds a summary text for the address, embeds it, and upserts to
-     * {@code address_embedding}.
-     *
-     * @param address wallet address
-     * @param chain   chain identifier
-     * @param window  time window shorthand
-     */
     public Mono<Void> refreshAddressEmbedding(String address, String chain, String window) {
         return Mono.fromCallable(() -> fetchSummaryParams(address, window))
                 .subscribeOn(Schedulers.boundedElastic())
@@ -87,53 +79,66 @@ public class EmbeddingService {
                 .then();
     }
 
-    /**
-     * Scheduled refresh every 5 minutes for addresses updated in the last 5 minutes.
-     */
     @Scheduled(fixedDelay = 300_000)
     public void refreshAll() {
         log.debug("EmbeddingService.refreshAll triggered");
         Mono.fromCallable(() ->
                         jdbc.queryForList(
-                                """
-                                SELECT DISTINCT address
-                                FROM address_stats
-                                WHERE updated_at > now() - interval '5 minutes'
-                                """,
+                                "SELECT DISTINCT address FROM address_stats WHERE updated_at > now() - interval '5 minutes'",
                                 String.class))
                 .subscribeOn(Schedulers.boundedElastic())
-                .flatMapIterable(addresses -> addresses)
+                .flatMapIterable(a -> a)
                 .flatMap(address ->
                         refreshAddressEmbedding(address, "solana", "1h")
                                 .onErrorResume(e -> {
                                     log.warn("refreshAll: failed for address={}", address, e);
                                     return Mono.empty();
                                 }))
-                .subscribe(
-                        v -> {},
-                        err -> log.error("EmbeddingService.refreshAll error", err));
+                .subscribe(v -> {}, err -> log.error("EmbeddingService.refreshAll error", err));
     }
 
     // -------------------------------------------------------------------------
-    // Internal helpers
+    // AI Studio path
     // -------------------------------------------------------------------------
 
-    private String refreshedToken() throws IOException {
-        credentials.refreshIfExpired();
-        return credentials.getAccessToken().getTokenValue();
-    }
-
-    private Mono<float[]> callEmbedEndpoint(String bearerToken, String text) {
-        String location  = props.vertex().location();
-        String projectId = props.vertex().projectId();
-        String model     = props.vertex().embedModel();
-
-        String url = ENDPOINT_TMPL.formatted(location, projectId, location, model);
+    private Mono<float[]> callAiStudio(String text) {
+        String url = AI_STUDIO_URL.formatted(props.vertex().embedModel(), props.vertex().geminiApiKey());
 
         Map<String, Object> body = Map.of(
-                "instances",  List.of(Map.of("content", text)),
-                "parameters", Map.of("outputDimensionality", 768));
+                "model",   "models/" + props.vertex().embedModel(),
+                "content", Map.of("parts", List.of(Map.of("text", text))));
 
+        return webClient.post()
+                .uri(url)
+                .header("Content-Type", "application/json")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .map(this::parseAiStudioResponse)
+                .doOnError(e -> log.error("EmbeddingService: AI Studio call failed", e));
+    }
+
+    private float[] parseAiStudioResponse(JsonNode root) {
+        JsonNode values = root.path("embedding").path("values");
+        if (!values.isArray() || values.isEmpty()) {
+            log.warn("EmbeddingService: empty embeddings from AI Studio");
+            return new float[3072];
+        }
+        float[] result = new float[values.size()];
+        for (int i = 0; i < values.size(); i++) result[i] = (float) values.get(i).asDouble();
+        return result;
+    }
+
+    // -------------------------------------------------------------------------
+    // Vertex AI path (fallback)
+    // -------------------------------------------------------------------------
+
+    private Mono<float[]> callVertex(String bearerToken, String text) {
+        String loc = props.vertex().location();
+        String url = VERTEX_URL.formatted(loc, props.vertex().projectId(), loc, props.vertex().embedModel());
+        Map<String, Object> body = Map.of(
+                "instances",  List.of(Map.of("content", text)),
+                "parameters", Map.of("outputDimensionality", 3072));
         return webClient.post()
                 .uri(url)
                 .header("Authorization", "Bearer " + bearerToken)
@@ -141,26 +146,26 @@ public class EmbeddingService {
                 .bodyValue(body)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .map(this::parseEmbeddingResponse)
-                .doOnError(e -> log.error("EmbeddingService: HTTP call to Vertex failed", e));
+                .map(this::parseVertexResponse)
+                .doOnError(e -> log.error("EmbeddingService: Vertex call failed", e));
     }
 
-    private float[] parseEmbeddingResponse(JsonNode root) {
-        JsonNode values = root
-                .path("predictions").path(0)
-                .path("embeddings").path("values");
-
-        if (!values.isArray() || values.isEmpty()) {
-            log.warn("EmbeddingService: empty or missing embeddings in response");
-            return new float[768];
-        }
-
+    private float[] parseVertexResponse(JsonNode root) {
+        JsonNode values = root.path("predictions").path(0).path("embeddings").path("values");
+        if (!values.isArray() || values.isEmpty()) return new float[3072];
         float[] result = new float[values.size()];
-        for (int i = 0; i < values.size(); i++) {
-            result[i] = (float) values.get(i).asDouble();
-        }
+        for (int i = 0; i < values.size(); i++) result[i] = (float) values.get(i).asDouble();
         return result;
     }
+
+    private String refreshedToken() throws IOException {
+        credentials.refreshIfExpired();
+        return credentials.getAccessToken().getTokenValue();
+    }
+
+    // -------------------------------------------------------------------------
+    // DB helpers
+    // -------------------------------------------------------------------------
 
     private record StatsParams(double outValue, int txCount) {}
 
@@ -171,39 +176,28 @@ public class EmbeddingService {
                     (rs, i) -> new StatsParams(rs.getDouble("out_value"), rs.getInt("tx_count")),
                     address, window);
         } catch (Exception e) {
-            log.debug("fetchSummaryParams: no stats for address={} window={}", address, window);
             return new StatsParams(0.0, 0);
         }
     }
 
-    private static String buildSummary(String address, String chain, String window, StatsParams params) {
+    private static String buildSummary(String address, String chain, String window, StatsParams p) {
         return "Address %s on %s: sent %.4f across %d transactions in last %s."
-                .formatted(address, chain, params.outValue(), params.txCount(), window);
+                .formatted(address, chain, p.outValue(), p.txCount(), window);
     }
 
     private void upsertEmbedding(String address, String summary, float[] embedding) {
         try {
-            PGobject vec = toVectorParam(embedding);
-            jdbc.update(
-                    """
+            String vectorStr = Arrays.toString(embedding).replace(" ", "");
+            PGobject vec = new PGobject();
+            vec.setType("vector"); vec.setValue(vectorStr);
+            jdbc.update("""
                     INSERT INTO address_embedding (address, summary, embedding, updated_at)
                     VALUES (?, ?, ?::vector, now())
                     ON CONFLICT (address) DO UPDATE
-                        SET summary    = EXCLUDED.summary,
-                            embedding  = EXCLUDED.embedding,
-                            updated_at = now()
-                    """,
-                    address, summary, vec);
+                        SET summary = EXCLUDED.summary, embedding = EXCLUDED.embedding, updated_at = now()
+                    """, address, summary, vec);
         } catch (SQLException e) {
-            throw new RuntimeException("Failed to build vector PGobject for address=" + address, e);
+            throw new RuntimeException("Failed to upsert embedding for address=" + address, e);
         }
-    }
-
-    private static PGobject toVectorParam(float[] embedding) throws SQLException {
-        String vectorStr = Arrays.toString(embedding).replace(" ", "");
-        PGobject pgObj = new PGobject();
-        pgObj.setType("vector");
-        pgObj.setValue(vectorStr);
-        return pgObj;
     }
 }

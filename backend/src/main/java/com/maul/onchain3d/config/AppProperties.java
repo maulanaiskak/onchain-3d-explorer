@@ -12,7 +12,8 @@ public record AppProperties(Vertex vertex, Ingest ingest, Copilot copilot) {
             String projectId,
             String location,
             String llmModel,
-            String embedModel) {
+            String embedModel,
+            String geminiApiKey) {
     }
 
     public record Ingest(

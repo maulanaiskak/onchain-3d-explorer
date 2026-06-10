@@ -20,38 +20,32 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * HTTP client for Vertex AI Gemini 1.5 Flash (structured JSON output).
+ * LLM client for Gemini 1.5 Flash structured JSON output.
  *
- * <p>Uses Google Application Default Credentials (ADC) for authentication.
- * Locally: {@code gcloud auth application-default login}.
- * On Cloud Run: service-account credentials are injected automatically.
+ * <p>Uses Google AI Studio (generativelanguage.googleapis.com) when a
+ * {@code GEMINI_API_KEY} is set — free tier, no billing required, 15 RPM.
+ * Falls back to Vertex AI with ADC when no key is present.
  */
 @Slf4j
 @Component
 public class VertexLlmClient {
 
-    private static final String ENDPOINT_TMPL =
+    // AI Studio
+    private static final String AI_STUDIO_URL =
+            "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s";
+
+    // Vertex AI
+    private static final String VERTEX_URL =
             "https://%s-aiplatform.googleapis.com/v1/projects/%s/locations/%s/publishers/google/models/%s:generateContent";
 
     private static final CopilotResponse FALLBACK =
-            new CopilotResponse("Unable to process request", List.of(), false);
-
-    private static final String RESPONSE_SCHEMA = """
-            {
-              "type": "object",
-              "properties": {
-                "narrative": { "type": "string" },
-                "commands":  { "type": "array", "items": { "type": "object" } },
-                "grounded":  { "type": "boolean" }
-              },
-              "required": ["narrative", "commands", "grounded"]
-            }
-            """;
+            new CopilotResponse("Unable to process request at this time.", List.of(), false);
 
     private final WebClient webClient;
     private final GoogleCredentials credentials;
     private final ObjectMapper objectMapper;
     private final AppProperties props;
+    private final boolean useAiStudio;
 
     public VertexLlmClient(@Qualifier("vertexWebClient") WebClient webClient,
                            GoogleCredentials credentials,
@@ -61,22 +55,22 @@ public class VertexLlmClient {
         this.credentials  = credentials;
         this.objectMapper = objectMapper;
         this.props        = props;
+        this.useAiStudio  = !props.vertex().geminiApiKey().isBlank();
+        log.info("VertexLlmClient: using {} backend", useAiStudio ? "AI Studio (free)" : "Vertex AI");
     }
 
-    /**
-     * Sends a prompt to Vertex AI Gemini and returns a structured copilot response.
-     *
-     * @param systemPrompt instructions / context for the model
-     * @param userPrompt   the user's natural-language query
-     */
     public Mono<CopilotResponse> complete(String systemPrompt, String userPrompt) {
-        return Mono.fromCallable(this::refreshedToken)
-                .subscribeOn(Schedulers.boundedElastic())
-                .flatMap(token -> callVertex(token, systemPrompt, userPrompt))
+        Mono<CopilotResponse> call = useAiStudio
+                ? callAiStudio(systemPrompt, userPrompt)
+                : Mono.fromCallable(this::refreshedToken)
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .flatMap(token -> callVertex(token, systemPrompt, userPrompt));
+
+        return call
                 .retryWhen(Retry.backoff(3, Duration.ofSeconds(2))
                         .maxBackoff(Duration.ofSeconds(16))
                         .filter(e -> e.getMessage() != null && e.getMessage().contains("429"))
-                        .doBeforeRetry(rs -> log.warn("VertexLlmClient: rate-limited — retrying (attempt {})", rs.totalRetries() + 1)))
+                        .doBeforeRetry(rs -> log.warn("VertexLlmClient: rate-limited — retry #{}", rs.totalRetries() + 1)))
                 .onErrorResume(e -> {
                     log.error("VertexLlmClient: request failed — returning fallback", e);
                     return Mono.just(FALLBACK);
@@ -84,30 +78,47 @@ public class VertexLlmClient {
     }
 
     // -------------------------------------------------------------------------
-    // Internal
+    // AI Studio path
     // -------------------------------------------------------------------------
 
-    private String refreshedToken() throws IOException {
-        credentials.refreshIfExpired();
-        return credentials.getAccessToken().getTokenValue();
-    }
+    private Mono<CopilotResponse> callAiStudio(String systemPrompt, String userPrompt) {
+        String url = AI_STUDIO_URL.formatted(props.vertex().llmModel(), props.vertex().geminiApiKey());
 
-    private Mono<CopilotResponse> callVertex(String bearerToken, String systemPrompt, String userPrompt) {
-        String location  = props.vertex().location();
-        String projectId = props.vertex().projectId();
-        String model     = props.vertex().llmModel();
-
-        String url = ENDPOINT_TMPL.formatted(location, projectId, location, model);
-
-        String combinedPrompt = "SYSTEM:\n" + systemPrompt + "\n\nUSER:\n" + userPrompt;
-
-        Map<String, Object> requestBody = Map.of(
+        Map<String, Object> body = Map.of(
+                "system_instruction", Map.of("parts", List.of(Map.of("text", systemPrompt))),
                 "contents", List.of(
                         Map.of("role", "user",
-                               "parts", List.of(Map.of("text", combinedPrompt)))),
+                               "parts", List.of(Map.of("text", userPrompt)))),
                 "generationConfig", Map.of(
                         "responseMimeType", "application/json",
-                        "responseSchema",   parseJson(RESPONSE_SCHEMA),
+                        "temperature",      0.2,
+                        "maxOutputTokens",  1024));
+
+        return webClient.post()
+                .uri(url)
+                .header("Content-Type", "application/json")
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .map(this::parseResponse)
+                .doOnError(e -> log.error("VertexLlmClient: AI Studio call failed", e));
+    }
+
+    // -------------------------------------------------------------------------
+    // Vertex AI path (fallback)
+    // -------------------------------------------------------------------------
+
+    private Mono<CopilotResponse> callVertex(String bearerToken, String systemPrompt, String userPrompt) {
+        String loc = props.vertex().location();
+        String url = VERTEX_URL.formatted(loc, props.vertex().projectId(), loc, props.vertex().llmModel());
+
+        String combined = "SYSTEM:\n" + systemPrompt + "\n\nUSER:\n" + userPrompt;
+        Map<String, Object> body = Map.of(
+                "contents", List.of(
+                        Map.of("role", "user",
+                               "parts", List.of(Map.of("text", combined)))),
+                "generationConfig", Map.of(
+                        "responseMimeType", "application/json",
                         "temperature",      0.2,
                         "maxOutputTokens",  1024));
 
@@ -115,15 +126,16 @@ public class VertexLlmClient {
                 .uri(url)
                 .header("Authorization", "Bearer " + bearerToken)
                 .header("Content-Type", "application/json")
-                .bodyValue(requestBody)
+                .bodyValue(body)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
                 .map(this::parseResponse)
-                .onErrorResume(e -> {
-                    log.error("VertexLlmClient: HTTP call failed", e);
-                    return Mono.just(FALLBACK);
-                });
+                .doOnError(e -> log.error("VertexLlmClient: Vertex call failed", e));
     }
+
+    // -------------------------------------------------------------------------
+    // Shared response parsing
+    // -------------------------------------------------------------------------
 
     private CopilotResponse parseResponse(JsonNode root) {
         try {
@@ -137,9 +149,9 @@ public class VertexLlmClient {
                 return FALLBACK;
             }
 
-            JsonNode parsed = objectMapper.readTree(text);
-            String narrative = parsed.path("narrative").asText("No narrative.");
-            boolean grounded = parsed.path("grounded").asBoolean(false);
+            JsonNode parsed   = objectMapper.readTree(text);
+            String narrative  = parsed.path("narrative").asText("No narrative.");
+            boolean grounded  = parsed.path("grounded").asBoolean(false);
 
             List<SceneCommand> commands = List.of();
             JsonNode cmdsNode = parsed.path("commands");
@@ -154,12 +166,8 @@ public class VertexLlmClient {
         }
     }
 
-    private Object parseJson(String json) {
-        try {
-            return objectMapper.readValue(json, Object.class);
-        } catch (Exception e) {
-            log.warn("VertexLlmClient: failed to parse schema JSON — sending raw string");
-            return json;
-        }
+    private String refreshedToken() throws IOException {
+        credentials.refreshIfExpired();
+        return credentials.getAccessToken().getTokenValue();
     }
 }
