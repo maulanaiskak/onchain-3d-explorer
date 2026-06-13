@@ -12,9 +12,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import reactor.util.retry.Retry;
 
 import java.io.IOException;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -57,10 +59,17 @@ public class EmbeddingService {
     }
 
     public Mono<float[]> embedText(String text) {
-        if (useAiStudio) return callAiStudio(text);
-        return Mono.fromCallable(this::refreshedToken)
-                .subscribeOn(Schedulers.boundedElastic())
-                .flatMap(token -> callVertex(token, text))
+        Mono<float[]> call = useAiStudio
+                ? callAiStudio(text)
+                : Mono.fromCallable(this::refreshedToken)
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .flatMap(token -> callVertex(token, text));
+
+        return call
+                .retryWhen(Retry.backoff(3, Duration.ofSeconds(4))
+                        .maxBackoff(Duration.ofSeconds(30))
+                        .filter(e -> e.getMessage() != null && e.getMessage().contains("429"))
+                        .doBeforeRetry(rs -> log.warn("EmbeddingService: rate-limited — retry #{}", rs.totalRetries() + 1)))
                 .doOnError(e -> log.error("EmbeddingService.embedText failed", e));
     }
 
@@ -79,21 +88,27 @@ public class EmbeddingService {
                 .then();
     }
 
-    @Scheduled(fixedDelay = 300_000)
+    // Runs every 30 minutes; caps at 15 addresses and throttles to 1/sec to stay within free-tier limits.
+    @Scheduled(fixedDelay = 1_800_000)
     public void refreshAll() {
         log.debug("EmbeddingService.refreshAll triggered");
         Mono.fromCallable(() ->
                         jdbc.queryForList(
-                                "SELECT DISTINCT address FROM address_stats WHERE updated_at > now() - interval '5 minutes'",
+                                """
+                                SELECT address FROM address_stats
+                                WHERE updated_at > now() - interval '30 minutes'
+                                ORDER BY tx_count DESC LIMIT 15
+                                """,
                                 String.class))
                 .subscribeOn(Schedulers.boundedElastic())
                 .flatMapIterable(a -> a)
+                .delayElements(Duration.ofSeconds(1))
                 .flatMap(address ->
-                        refreshAddressEmbedding(address, "solana", "1h")
+                        refreshAddressEmbedding(address, "evm:base", "1h")
                                 .onErrorResume(e -> {
                                     log.warn("refreshAll: failed for address={}", address, e);
                                     return Mono.empty();
-                                }))
+                                }), 1)
                 .subscribe(v -> {}, err -> log.error("EmbeddingService.refreshAll error", err));
     }
 

@@ -14,6 +14,7 @@ export interface EdgeDTO {
   asset: string;
   valueNorm: number;
   blockTime: string;
+  chain: string;
 }
 
 export const MOCK_NODES: NodeDTO[] = [
@@ -28,12 +29,12 @@ export const MOCK_NODES: NodeDTO[] = [
 ];
 
 export const MOCK_EDGES: EdgeDTO[] = [
-  { id: "e1", from: "0xAAABBB", to: "0xCCCDDD", asset: "SOL", valueNorm: 0.8, blockTime: "2026-06-10T01:00:00Z" },
-  { id: "e2", from: "0xAAABBB", to: "0xEEEFFF", asset: "SOL", valueNorm: 0.5, blockTime: "2026-06-10T01:01:00Z" },
-  { id: "e3", from: "0xCCCDDD", to: "0x111222", asset: "SOL", valueNorm: 0.3, blockTime: "2026-06-10T01:02:00Z" },
-  { id: "e4", from: "0x111222", to: "0x555666", asset: "SOL", valueNorm: 0.2, blockTime: "2026-06-10T01:03:00Z" },
-  { id: "e5", from: "0x333444", to: "0xEEEFFF", asset: "SOL", valueNorm: 0.6, blockTime: "2026-06-10T01:04:00Z" },
-  { id: "e6", from: "0x777888", to: "0x333444", asset: "SOL", valueNorm: 0.4, blockTime: "2026-06-10T01:05:00Z" },
-  { id: "e7", from: "0x777888", to: "0x999AAA", asset: "SOL", valueNorm: 0.3, blockTime: "2026-06-10T01:06:00Z" },
-  { id: "e8", from: "0x999AAA", to: "0xAAABBB", asset: "SOL", valueNorm: 0.7, blockTime: "2026-06-10T01:07:00Z" },
+  { id: "e1", from: "0xAAABBB", to: "0xCCCDDD", asset: "SOL", valueNorm: 0.8, blockTime: "2026-06-10T01:00:00Z", chain: "solana" },
+  { id: "e2", from: "0xAAABBB", to: "0xEEEFFF", asset: "SOL", valueNorm: 0.5, blockTime: "2026-06-10T01:01:00Z", chain: "solana" },
+  { id: "e3", from: "0xCCCDDD", to: "0x111222", asset: "SOL", valueNorm: 0.3, blockTime: "2026-06-10T01:02:00Z", chain: "solana" },
+  { id: "e4", from: "0x111222", to: "0x555666", asset: "SOL", valueNorm: 0.2, blockTime: "2026-06-10T01:03:00Z", chain: "solana" },
+  { id: "e5", from: "0x333444", to: "0xEEEFFF", asset: "SOL", valueNorm: 0.6, blockTime: "2026-06-10T01:04:00Z", chain: "solana" },
+  { id: "e6", from: "0x777888", to: "0x333444", asset: "SOL", valueNorm: 0.4, blockTime: "2026-06-10T01:05:00Z", chain: "solana" },
+  { id: "e7", from: "0x777888", to: "0x999AAA", asset: "SOL", valueNorm: 0.3, blockTime: "2026-06-10T01:06:00Z", chain: "solana" },
+  { id: "e8", from: "0x999AAA", to: "0xAAABBB", asset: "SOL", valueNorm: 0.7, blockTime: "2026-06-10T01:07:00Z", chain: "solana" },
 ];

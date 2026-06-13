@@ -71,11 +71,12 @@ public class EvmConnector implements ChainConnector {
 
         log.info("EvmConnector: connecting to {} for chain={}", wsUrl, chainId);
 
-        return openWebSocket(wsUrl)
+        return Flux.defer(() -> openWebSocket(wsUrl))
                 .retryWhen(Retry.backoff(Long.MAX_VALUE, Duration.ofSeconds(3))
                         .maxBackoff(Duration.ofSeconds(30))
                         .doBeforeRetry(rs -> log.warn(
-                                "EvmConnector: WS error — retry #{}", rs.totalRetries() + 1)));
+                                "EvmConnector: reconnecting (attempt #{})", rs.totalRetries() + 1)))
+                .repeat();
     }
 
     // -------------------------------------------------------------------------

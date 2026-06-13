@@ -80,6 +80,7 @@ public class GraphService {
                 t.getToAddr(),
                 t.getAsset(),
                 t.getValueNorm(),
-                blockTimeStr);
+                blockTimeStr,
+                t.getChain());
     }
 }

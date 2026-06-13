@@ -52,6 +52,10 @@ public class SseController {
 
         log.info("SSE client connected chain={} window={}", chain, window);
 
+        // Send a heartbeat immediately so the browser receives headers right away and fires onopen.
+        Flux<ServerSentEvent<String>> hello = Flux.just(
+                toSse("heartbeat", new Delta.Heartbeat(Instant.now().toString())));
+
         Flux<ServerSentEvent<String>> snapshot = graphService.snapshot(chain, window)
                 .map(s -> toSse("snapshot", s))
                 .flux()
@@ -64,7 +68,7 @@ public class SseController {
         Flux<ServerSentEvent<String>> heartbeat = Flux.interval(Duration.ofSeconds(15))
                 .map(t -> toSse("heartbeat", new Delta.Heartbeat(Instant.now().toString())));
 
-        return Flux.merge(snapshot, live, heartbeat)
+        return Flux.concat(hello, Flux.merge(snapshot, live, heartbeat))
                 .doOnCancel(() -> log.info("SSE client disconnected chain={}", chain));
     }
 

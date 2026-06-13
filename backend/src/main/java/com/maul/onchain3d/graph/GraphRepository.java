@@ -97,43 +97,80 @@ public class GraphRepository {
     private Delta.Snapshot buildSnapshot(String chain, String window) {
         String intervalExpr = toIntervalExpr(window);
 
-        // --- edges -------------------------------------------------------
-        List<EdgeDTO> edges = jdbc.query(
+        // --- nodes with computed metrics ---------------------------------
+        // Subquery JOIN avoids a dynamic IN-clause with thousands of parameters.
+        // weight  = address's total out_value normalised to [0,1] against the window max.
+        // recency = how recently the address was seen, decayed linearly from 1→0 over the window.
+        List<NodeDTO> nodes = jdbc.query(
                 """
-                SELECT tx_hash, log_index, from_addr, to_addr, asset, value_norm, block_time
-                FROM transfer
-                WHERE chain = ?
-                  AND block_time > now() - ?::interval
-                ORDER BY block_time DESC
-                LIMIT 2000
+                WITH window_transfers AS (
+                    SELECT from_addr, to_addr, value_norm, block_time
+                    FROM transfer
+                    WHERE chain = ?
+                      AND block_time > now() - ?::interval
+                ),
+                addr_stats AS (
+                    SELECT addr,
+                           SUM(value_norm)                       AS out_value,
+                           MAX(block_time)                       AS last_seen
+                    FROM (
+                        SELECT from_addr AS addr, value_norm, block_time FROM window_transfers
+                        UNION ALL
+                        SELECT to_addr   AS addr, value_norm, block_time FROM window_transfers
+                    ) t
+                    GROUP BY addr
+                ),
+                max_val AS (SELECT COALESCE(MAX(out_value), 1) AS mv FROM addr_stats),
+                window_secs AS (SELECT EXTRACT(EPOCH FROM ?::interval) AS ws)
+                SELECT a.address,
+                       a.chain,
+                       a.label,
+                       COALESCE(s.out_value / NULLIF(mx.mv, 0), 0)           AS weight,
+                       GREATEST(0, 1 - EXTRACT(EPOCH FROM (now() - s.last_seen)) / ws.ws) AS recency,
+                       COALESCE(s.out_value / NULLIF(mx.mv, 0), 0) > 0.5     AS is_whale
+                FROM addr_stats s
+                JOIN address a ON a.address = s.addr
+                CROSS JOIN max_val mx
+                CROSS JOIN window_secs ws
+                ORDER BY weight DESC
+                LIMIT 500
                 """,
-                (rs, i) -> new EdgeDTO(
-                        rs.getString("tx_hash") + "-" + rs.getInt("log_index"),
-                        rs.getString("from_addr"),
-                        rs.getString("to_addr"),
-                        rs.getString("asset"),
-                        rs.getDouble("value_norm"),
-                        rs.getTimestamp("block_time").toInstant().toString()),
-                chain, intervalExpr);
+                (rs, i) -> new NodeDTO(
+                        rs.getString("address"),
+                        rs.getString("chain"),
+                        rs.getString("label"),
+                        rs.getDouble("weight"),
+                        rs.getDouble("recency"),
+                        rs.getBoolean("is_whale")),
+                chain, intervalExpr, intervalExpr);
 
-        // Collect unique addresses from the transfer set
-        java.util.Set<String> addrSet = new java.util.LinkedHashSet<>();
-        edges.forEach(e -> { addrSet.add(e.from()); addrSet.add(e.to()); });
+        // Collect the node IDs that made the cut, then fetch only their edges
+        java.util.Set<String> nodeIds = new java.util.LinkedHashSet<>();
+        nodes.forEach(n -> nodeIds.add(n.id()));
 
-        List<NodeDTO> nodes;
-        if (addrSet.isEmpty()) {
-            nodes = List.of();
+        // --- edges -------------------------------------------------------
+        List<EdgeDTO> edges;
+        if (nodeIds.isEmpty()) {
+            edges = List.of();
         } else {
-            String placeholders = String.join(",",
-                    java.util.Collections.nCopies(addrSet.size(), "?"));
-            nodes = jdbc.query(
-                    "SELECT address, chain, label FROM address WHERE address IN (" + placeholders + ")",
-                    (rs, i) -> new NodeDTO(
-                            rs.getString("address"),
-                            rs.getString("chain"),
-                            rs.getString("label"),
-                            0.0, 1.0, false),
-                    addrSet.toArray());
+            edges = jdbc.query(
+                    """
+                    SELECT tx_hash, log_index, from_addr, to_addr, asset, value_norm, block_time
+                    FROM transfer
+                    WHERE chain = ?
+                      AND block_time > now() - ?::interval
+                    ORDER BY block_time DESC
+                    LIMIT 2000
+                    """,
+                    (rs, i) -> new EdgeDTO(
+                            rs.getString("tx_hash") + "-" + rs.getInt("log_index"),
+                            rs.getString("from_addr"),
+                            rs.getString("to_addr"),
+                            rs.getString("asset"),
+                            rs.getDouble("value_norm"),
+                            rs.getTimestamp("block_time").toInstant().toString(),
+                            chain),
+                    chain, intervalExpr);
         }
 
         String serverTime = Instant.now().toString();

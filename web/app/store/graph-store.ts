@@ -3,6 +3,10 @@
 import { create } from "zustand";
 import { NodeDTO, EdgeDTO } from "@/app/lib/mock-data";
 
+// Hard caps — keep recent data visible without freezing the browser
+const MAX_NODES = 150;
+const MAX_EDGES = 300;
+
 export interface CopilotOverlay {
   highlightedIds: Set<string>;
   focusedId: string | null;
@@ -17,6 +21,7 @@ interface GraphState {
   chain: string;
   overlay: CopilotOverlay;
 
+  setChain: (chain: string) => void;
   setSelected: (id: string | null) => void;
   upsertNodes: (nodes: NodeDTO[]) => void;
   upsertEdges: (edges: EdgeDTO[]) => void;
@@ -43,8 +48,10 @@ export const useGraphStore = create<GraphState>((set) => ({
   nodes: [],
   edges: [],
   selectedId: null,
-  chain: "solana",
+  chain: "evm:base",
   overlay: defaultOverlay,
+
+  setChain: (chain) => set({ chain, nodes: [], edges: [] }),
 
   setSelected: (id) => set({ selectedId: id }),
 
@@ -52,14 +59,22 @@ export const useGraphStore = create<GraphState>((set) => ({
     set((s) => {
       const map = new Map(s.nodes.map((n) => [n.id, n]));
       incoming.forEach((n) => map.set(n.id, n));
-      return { nodes: Array.from(map.values()) };
+      let all = Array.from(map.values());
+      // Keep highest-weight nodes when over cap
+      if (all.length > MAX_NODES) {
+        all.sort((a, b) => b.weight - a.weight);
+        all = all.slice(0, MAX_NODES);
+      }
+      return { nodes: all };
     }),
 
   upsertEdges: (incoming) =>
     set((s) => {
       const map = new Map(s.edges.map((e) => [e.id, e]));
       incoming.forEach((e) => map.set(e.id, e));
-      return { edges: Array.from(map.values()) };
+      const all = Array.from(map.values());
+      // Sliding window: drop oldest entries (inserted first) when over cap
+      return { edges: all.length > MAX_EDGES ? all.slice(all.length - MAX_EDGES) : all };
     }),
 
   decayNodes: (ids) =>
@@ -74,7 +89,10 @@ export const useGraphStore = create<GraphState>((set) => ({
       return { edges: s.edges.filter((e) => !gone.has(e.id)) };
     }),
 
-  replaceGraph: (nodes, edges) => set({ nodes, edges }),
+  replaceGraph: (nodes, edges) => set({
+    nodes: nodes.slice(0, MAX_NODES),
+    edges: edges.slice(0, MAX_EDGES),
+  }),
 
   highlightNodes: (ids) =>
     set((s) => ({

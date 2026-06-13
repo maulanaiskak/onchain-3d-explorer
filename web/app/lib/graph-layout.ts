@@ -28,8 +28,8 @@ export function computeLayout(
     ]);
   });
 
-  // 50 iterations of simple spring layout
-  for (let iter = 0; iter < 50; iter++) {
+  // 20 iterations — enough for readable layout without blocking the main thread
+  for (let iter = 0; iter < 20; iter++) {
     const forces = new Map<string, [number, number, number]>(
       nodes.map((n) => [n.id, [0, 0, 0]])
     );

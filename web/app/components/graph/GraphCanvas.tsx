@@ -2,15 +2,42 @@
 
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Stars } from "@react-three/drei";
-import { Suspense, useMemo } from "react";
-import { computeLayout } from "@/app/lib/graph-layout";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { computeLayout, PositionedNode, PositionedEdge } from "@/app/lib/graph-layout";
 import { useGraphStore } from "@/app/store/graph-store";
 import GraphNode from "./GraphNode";
 import GraphEdge from "./GraphEdge";
 
+interface Layout {
+  nodes: PositionedNode[];
+  edges: PositionedEdge[];
+}
+
 export default function GraphCanvas() {
-  const { nodes, edges, selectedId, setSelected } = useGraphStore();
-  const layout = useMemo(() => computeLayout(nodes, edges), [nodes, edges]);
+  const nodes     = useGraphStore((s) => s.nodes);
+  const edges     = useGraphStore((s) => s.edges);
+  const selectedId = useGraphStore((s) => s.selectedId);
+  const setSelected = useGraphStore((s) => s.setSelected);
+
+  const [layout, setLayout] = useState<Layout>({ nodes: [], edges: [] });
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nodeKeyRef  = useRef<string>("");
+
+  // Recompute layout only when node set changes, debounced so rapid upserts don't spam it
+  useEffect(() => {
+    const key = nodes.map((n) => n.id).join(",");
+    if (key === nodeKeyRef.current) return;
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      nodeKeyRef.current = key;
+      setLayout(computeLayout(nodes, edges));
+    }, 800);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [nodes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <Canvas
@@ -42,8 +69,9 @@ export default function GraphCanvas() {
       <OrbitControls
         enableDamping
         dampingFactor={0.05}
-        minDistance={5}
-        maxDistance={40}
+        minDistance={2}
+        maxDistance={120}
+        zoomSpeed={1.5}
       />
     </Canvas>
   );

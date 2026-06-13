@@ -34,7 +34,7 @@ import java.util.Map;
 @Slf4j
 public class SolanaConnector implements ChainConnector {
 
-    private static final String PUBLIC_WS_URL   = "wss://api.mainnet-beta.solana.com";
+    private static final String PUBLIC_WS_URL   = "wss://solana.publicnode.com";
     private static final String PUBLIC_REST_URL  = "https://api.mainnet-beta.solana.com";
     private static final String HELIUS_WS_TMPL  = "wss://mainnet.helius-rpc.com/?api-key=%s";
     private static final String HELIUS_REST_TMPL = "https://mainnet.helius-rpc.com/?api-key=%s";
@@ -70,14 +70,14 @@ public class SolanaConnector implements ChainConnector {
 
         log.info("SolanaConnector: connecting to {}", wsUrl);
 
-        return openWebSocket(wsUrl)
-                // Fetch full transaction details for each signature
-                .flatMap(sig -> fetchTransaction(sig), 8)
-                .filter(e -> e != null)
+        return Flux.defer(() -> openWebSocket(wsUrl)
+                        .flatMap(sig -> fetchTransaction(sig), 8)
+                        .filter(e -> e != null))
                 .retryWhen(Retry.backoff(Long.MAX_VALUE, Duration.ofSeconds(3))
                         .maxBackoff(Duration.ofSeconds(30))
                         .doBeforeRetry(rs -> log.warn(
-                                "SolanaConnector: WS error — retry #{}", rs.totalRetries() + 1)));
+                                "SolanaConnector: reconnecting (attempt #{})", rs.totalRetries() + 1)))
+                .repeat();
     }
 
     // -------------------------------------------------------------------------

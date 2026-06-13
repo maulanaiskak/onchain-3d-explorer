@@ -77,7 +77,8 @@ public class IngestPipeline {
                 edge.toAddr(),
                 edge.asset(),
                 edge.valueNorm(),
-                edge.blockTime().toString());
+                edge.blockTime().toString(),
+                edge.chain());
         publisher.emit(new Delta.UpsertEdges(List.of(edgeDto)));
     }
 }

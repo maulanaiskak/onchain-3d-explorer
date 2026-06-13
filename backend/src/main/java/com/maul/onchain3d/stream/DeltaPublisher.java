@@ -60,15 +60,19 @@ public class DeltaPublisher {
         return switch (delta) {
             case Delta.Snapshot s        -> chainInNodes(s.nodes(), chain);
             case Delta.UpsertNodes un    -> chainInNodes(un.nodes(), chain);
-            // EdgeDTO has no chain field — pass all edge updates through; frontend filters visually
-            case Delta.UpsertEdges ignored -> true;
-            case Delta.Decay ignored       -> true;
-            case Delta.Heartbeat ignored   -> true;
+            case Delta.UpsertEdges ue    -> chainInEdges(ue.edges(), chain);
+            case Delta.Decay ignored     -> true;
+            case Delta.Heartbeat ignored -> true;
         };
     }
 
     private static boolean chainInNodes(List<NodeDTO> nodes, String chain) {
         if (nodes == null || nodes.isEmpty()) return true;
         return chain.equals(nodes.getFirst().chain());
+    }
+
+    private static boolean chainInEdges(List<com.maul.onchain3d.stream.dto.EdgeDTO> edges, String chain) {
+        if (edges == null || edges.isEmpty()) return true;
+        return chain.equals(edges.getFirst().chain());
     }
 }

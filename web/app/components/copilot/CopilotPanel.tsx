@@ -19,6 +19,7 @@ export default function CopilotPanel() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const {
+    chain,
     highlightNodes, focusNode, annotateNode,
     filterByAsset, resetOverlay, setSelected,
   } = useGraphStore();
@@ -45,7 +46,7 @@ export default function CopilotPanel() {
     }
   };
 
-  const { messages, loading, send, clear } = useCopilot("solana", "1h");
+  const { messages, loading, send, clear } = useCopilot(chain, "1h");
 
   const submit = () => {
     const text = input.trim();

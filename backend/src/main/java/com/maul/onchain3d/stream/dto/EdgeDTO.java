@@ -10,4 +10,4 @@ package com.maul.onchain3d.stream.dto;
  * @param valueNorm normalised transfer value
  * @param blockTime ISO-8601 timestamp of the containing block
  */
-public record EdgeDTO(String id, String from, String to, String asset, double valueNorm, String blockTime) {}
+public record EdgeDTO(String id, String from, String to, String asset, double valueNorm, String blockTime, String chain) {}

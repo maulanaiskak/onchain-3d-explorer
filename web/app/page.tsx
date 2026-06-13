@@ -8,6 +8,9 @@ import { useSseStream, ConnectionStatus } from "@/app/lib/use-sse-stream";
 import NodePanel from "@/app/components/graph/NodePanel";
 import Hud from "@/app/components/graph/Hud";
 import CopilotPanel from "@/app/components/copilot/CopilotPanel";
+import Legend from "@/app/components/graph/Legend";
+import ActivityFeed from "@/app/components/graph/ActivityFeed";
+import HelpPanel from "@/app/components/graph/HelpPanel";
 
 const GraphCanvas = dynamic(() => import("@/app/components/graph/GraphCanvas"), {
   ssr: false,
@@ -21,7 +24,7 @@ const GraphCanvas = dynamic(() => import("@/app/components/graph/GraphCanvas"), 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === "true";
 
 export default function Home() {
-  const { upsertNodes, upsertEdges } = useGraphStore();
+  const { upsertNodes, upsertEdges, chain } = useGraphStore();
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
 
   useEffect(() => {
@@ -32,13 +35,18 @@ export default function Home() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useSseStream("solana", "1h", setStatus, USE_MOCK);
+  useEffect(() => { setStatus("connecting"); }, [chain]);
+
+  useSseStream(chain, "1h", setStatus, USE_MOCK);
 
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-[#050914]">
       <GraphCanvas />
       <Hud status={status} />
       <NodePanel />
+      <ActivityFeed />
+      <Legend />
+      <HelpPanel />
       <CopilotPanel />
     </main>
   );

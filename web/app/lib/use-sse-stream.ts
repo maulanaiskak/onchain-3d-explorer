@@ -6,20 +6,22 @@ import { NodeDTO, EdgeDTO } from "./mock-data";
 
 type DeltaType = "snapshot" | "upsertNodes" | "upsertEdges" | "decay" | "heartbeat";
 
-interface SnapshotPayload  { type: "snapshot";    nodes: NodeDTO[]; edges: EdgeDTO[] }
+interface SnapshotPayload   { type: "snapshot";    nodes: NodeDTO[]; edges: EdgeDTO[] }
 interface UpsertNodesPayload { type: "upsertNodes"; nodes: NodeDTO[] }
 interface UpsertEdgesPayload { type: "upsertEdges"; edges: EdgeDTO[] }
-interface DecayPayload      { type: "decay";        nodeIds: string[]; edgeIds: string[] }
-interface HeartbeatPayload  { type: "heartbeat";    serverTime: string }
+interface DecayPayload       { type: "decay";       nodeIds: string[]; edgeIds: string[] }
 
 type Delta =
   | SnapshotPayload
   | UpsertNodesPayload
   | UpsertEdgesPayload
   | DecayPayload
-  | HeartbeatPayload;
+  | { type: "heartbeat" };
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
+
+// Flush batched node/edge upserts at most 4× per second to avoid flooding React
+const FLUSH_MS = 250;
 
 export function useSseStream(
   chain: string,
@@ -28,69 +30,74 @@ export function useSseStream(
   disabled = false
 ) {
   const { upsertNodes, upsertEdges, decayNodes, decayEdges, replaceGraph } = useGraphStore();
-  const esRef = useRef<EventSource | null>(null);
-  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryDelay = useRef(1000);
+  const esRef       = useRef<EventSource | null>(null);
+  const retryRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryDelay  = useRef(1000);
+  const nodesBuf    = useRef<NodeDTO[]>([]);
+  const edgesBuf    = useRef<EdgeDTO[]>([]);
+  const flushRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (disabled) return;
     let cancelled = false;
+
+    function flush() {
+      if (nodesBuf.current.length) { upsertNodes(nodesBuf.current); nodesBuf.current = []; }
+      if (edgesBuf.current.length) { upsertEdges(edgesBuf.current); edgesBuf.current = []; }
+      flushRef.current = null;
+    }
+
+    function scheduleFlush() {
+      if (!flushRef.current) flushRef.current = setTimeout(flush, FLUSH_MS);
+    }
 
     function connect() {
       if (cancelled) return;
       onStatusChange("connecting");
 
       const base = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8080";
-      const url = `${base}/api/stream?chain=${encodeURIComponent(chain)}&window=${encodeURIComponent(window)}`;
-      const es = new EventSource(url);
+      const url  = `${base}/api/stream?chain=${encodeURIComponent(chain)}&window=${encodeURIComponent(window)}`;
+      const es   = new EventSource(url);
       esRef.current = es;
 
       const handleEvent = (type: DeltaType) => (e: MessageEvent) => {
         try {
           const payload = JSON.parse(e.data) as Delta;
-
           switch (payload.type ?? type) {
             case "snapshot":
+              // Flush any pending batches first, then replace
+              flush();
               replaceGraph((payload as SnapshotPayload).nodes, (payload as SnapshotPayload).edges);
               break;
             case "upsertNodes":
-              upsertNodes((payload as UpsertNodesPayload).nodes);
+              nodesBuf.current.push(...(payload as UpsertNodesPayload).nodes);
+              scheduleFlush();
               break;
             case "upsertEdges":
-              upsertEdges((payload as UpsertEdgesPayload).edges);
+              edgesBuf.current.push(...(payload as UpsertEdgesPayload).edges);
+              scheduleFlush();
               break;
             case "decay":
+              flush();
               decayNodes((payload as DecayPayload).nodeIds);
               decayEdges((payload as DecayPayload).edgeIds);
               break;
-            case "heartbeat":
-              // no-op, just confirms connection is alive
-              break;
           }
-        } catch {
-          // malformed event — ignore
-        }
+        } catch { /* malformed — ignore */ }
       };
 
-      // EventSource doesn't expose an onopen-equivalent for named events,
-      // so mark connected as soon as the first event of any type arrives.
-      // For named-event SSE, onopen fires when the HTTP connection is established.
-      es.onopen = () => {
-        retryDelay.current = 1000;
-        onStatusChange("connected");
-      };
+      es.onopen = () => { retryDelay.current = 1000; onStatusChange("connected"); };
 
       es.addEventListener("snapshot",    handleEvent("snapshot"));
       es.addEventListener("upsertNodes", handleEvent("upsertNodes"));
       es.addEventListener("upsertEdges", handleEvent("upsertEdges"));
       es.addEventListener("decay",       handleEvent("decay"));
-      es.addEventListener("heartbeat",   handleEvent("heartbeat"));
+      es.addEventListener("heartbeat",   () => {});
 
       es.onerror = () => {
         if (cancelled) return;
         es.close();
         onStatusChange("disconnected");
-        // exponential backoff capped at 30s
         retryRef.current = setTimeout(() => {
           retryDelay.current = Math.min(retryDelay.current * 2, 30_000);
           connect();
@@ -103,7 +110,8 @@ export function useSseStream(
     return () => {
       cancelled = true;
       esRef.current?.close();
-      if (retryRef.current) clearTimeout(retryRef.current);
+      if (retryRef.current)  clearTimeout(retryRef.current);
+      if (flushRef.current)  clearTimeout(flushRef.current);
       onStatusChange("disconnected");
     };
   }, [chain, window]); // eslint-disable-line react-hooks/exhaustive-deps
