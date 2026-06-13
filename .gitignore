@@ -30,6 +30,9 @@ application-secrets.yml
 .vscode/
 *.DS_Store
 
+# Planning / task docs
+docs/
+
 # Logs
 *.log
 logs/
